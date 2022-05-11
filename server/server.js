@@ -4,6 +4,10 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+
 
 const app = express();
 const mongoose = require('mongoose');
@@ -22,6 +26,7 @@ mongoose.connect(process.env.DATABASE, {
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 app.use(cookieParser());
+app.use(cors());
 
 //Start Listening
 const port = process.env.PORT || 3002;
@@ -56,55 +61,88 @@ app.get('/api/users/auth', auth, (req, res) => {
         isAdmin: req.user.role === 0 ? false : true,
         isAuth: true,
         email: req.user.email,
-        name: req.user.name,
-        lastname: req.user.lastname,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
         role: req.user.role,
         cart: req.user.cart,
         history: req.user.history
     })
 })
 
+const signUp = async (req, res) => {
+    const { email, password, firstName, lastName } = req.body;
+    try {
+      const oldUser = await User.findOne({ email });
+  
+      if (oldUser) return res.status(400).json({ success : false, message: "User already exists" });
+  
+      const hashedPassword = await bcrypt.hash(password, 12);
+  
+      const result = await User.create({ email, password: hashedPassword, firstName: `${firstName}`, lastName: `${lastName}` });
+  
+      const token = jwt.sign( { email: result.email, id: result._id }, process.env.SECRET, { expiresIn: "7d" } );
+  
+    //   res.status(201).json({ result, token });
+      res.status(201).json({ success : true, result :{ name : result.firstName,
+        lastName: result.lastName,
+        email: result.email,
+        token }});
+    } catch (error) {
+      res.status(500).json({success : false, message: "Something went wrong" });
+      
+      console.log(error);
+    }
+  };
 
-app.post('/api/users/register', (req, res) => {
-    //create new User
-    const user = new User(req.body);
+  const signIn = async (req, res) => {
+    const { email, password } = req.body;
+  
+    try {
+      const oldUser = await User.findOne({ email });
 
-    //save user
-    user.save((err, doc) => {
-        if (err)
-            return res.json({ success: false, err });
-        res.status(200).json({
-            success: true,
-        });
+      if (!oldUser) return res.status(404).json({ loginSuccess : false, message: "User doesn't exist" });
+
+      const isPasswordCorrect = await bcrypt.compare(password, oldUser.password);
+      if (!isPasswordCorrect){ 
+          return res.status(400).json({ loginSuccess : false, message: "Invalid credentials" });
+        }
+  
+      const token = jwt.sign({ email: oldUser.email, id: oldUser._id }, process.env.SECRET, { expiresIn: "7d" });
+  
+    //   res.status(200).json({ result: oldUser, token });
+      res.status(200).json({ loginSuccess : true, 
+        result :{
+            name : oldUser.firstName, 
+            lastName: oldUser.lastName,
+            email: oldUser.email,},
+        token 
     });
-})
+    } catch (err) {
+      res.status(500).json({ loginSuccess : false, message: "Something went wrong" });
+    }
+  };
+app.post('/api/users/register', (req, res) => {
+    return signUp(req,res);
+});
 
 app.post('/api/users/login', (req, res) => {
+    return signIn(req,res);
+});
 
-    //find the email for the user
-    User.findOne({ 'email': req.body.email }, (err, user) => {
-        if (!user)
-            return res.json({ loginSuccess: false, message: 'Authentication failed, email not found' });
-
-        //check the password
-        user.comparePassword(req.body.password, (error, isMatch) => {
-            if (!isMatch)
-                return res.json({ loginSuccess: false, message: 'Wrong password' });
-
-            //generate token
-            user.generateToken((err, user) => {
-                // console.log('generateToken', err, user);
-                if (err)
-                    return res.status(400).send(err);
-
-                //store token as a cookie
-                res.cookie('w_auth', user.token).status(200).json({
-                    loginSuccess: true
-                })
-            })
-
+app.get('/api/users/testToken', auth, (req, res) => {
+    console.log('passed auth');
+    const data = req.body;
+    try {
+        res.status(200).json({
+            authenticated: true,
+            message: "API Call Succesfull"
         })
-    })
+    } catch (error) {
+        res.status(500).json({
+            authenticated: false,
+            message: "API Call Failed"
+        })
+    }
 })
 
 app.get('/api/users/logout', auth, (req, res) => {
